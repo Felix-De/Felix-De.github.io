@@ -1,0 +1,109 @@
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <title>Document</title>
+</head>
+
+<body>
+    <div id="app">
+        <div class="toolbar">
+            <div class="title">Aris Meeha Allocation</div>
+            <div class="spacer"></div>
+            <div class="row" style="justify-content:end; gap:.4rem;">
+                <button id="toggleEdit" class="button2">Edit</button>
+                <button id="btnSave" class="btn" disabled>Save</button>
+                <select id="viewSelect" class="select">
+                    <option value="YEAR" selected>Year</option>
+                    <option value="THREE">3 Months</option>
+                    <option value="MONTH">Month</option>
+                </select>
+            </div>
+        </div>
+        <div class="date-controls">
+            <button id="prevMonth" class="btn">◀ Previous</button>
+            <span id="monthLabel" class="btn"></span>
+            <button id="nextMonth" class="btn">Next ▶</button>
+        </div>
+        <section id="timeline">
+            <div class="viewport">
+                <div id="timeline-header">
+                    <div id="datesGrid" class="dates-grid"></div>
+                </div>
+                <div id="board">
+                    <!-- ...add up to Person 20... -->
+                </div>
+            </div>
+        </section>
+        <aside id="drawer">
+            <div class="pool-header">
+                <strong><button id="btnCollapsePool" class="btn" title="Collapse">Pool</button></strong>
+                <div class="row">
+                    <button id="btnAddShortcut" class="btn" title="Add items (sheet)">＋</button>
+                </div>
+            </div>
+            <div class="pool-tabs">
+                <button id="tabPending" class="pool-tab active">Pending Allocation</button>
+                <button id="tabApp" class="pool-tab">App Settings</button>
+            </div>
+            <div id="panelPending" class="pool-body"><!-- list renders here; add row is sticky at bottom --></div>
+            <div id="panelApp" class="pool-body hidden">
+                <div style="font-weight:600; margin-bottom:.5rem;">App Settings</div>
+                <div style="margin-bottom:.75rem">
+                    <div style="color:var(--muted); font-size:.875rem; margin-bottom:.25rem">People</div>
+                    <div id="peopleList" class="row" style="flex-wrap:wrap"></div>
+                </div>
+                <div style="margin-bottom:.75rem">
+                    <div style="color:var(--muted); font-size:.875rem; margin-bottom:.25rem">Country color codes
+                    </div>
+                    <div id="colors"
+                        style="display:grid; grid-template-columns: repeat(3, minmax(7.5rem, 1fr)); gap:.5rem;">
+                    </div>
+                </div>
+                <div class="row">
+                    <select id="deactivateSel" class="border"
+                        style="padding:.25rem .5rem; background:#0b1118; color:var(--text); border-radius:.375rem"></select>
+                    <button class="btn">Deactivate</button>
+                </div>
+                <div style="margin-top:1rem">
+                    <button id="btnLogout" class="btn" style="width:100%">Logout</button>
+                </div>
+            </div>
+            <div class="pool-footer">
+                <button id="flipSide" class="btn full flip" title="Flip to other side">⇄</button>
+            </div>
+        </aside>
+        <footer id="footer">
+            <div class="footer-text">
+                <span>Version 1.1</span>
+            </div>
+        </footer>
+    </div>
+
+    <section id="addItemsPage" class="hidden">
+        <div class="addpage-header">
+            <button id="backToMain" class="btn">⟵ Back</button>
+            <strong style="opacity:.9">Add Pending Items</strong>
+            <div class="spacer"></div>
+            <button id="add5Rows" class="btn">+5 rows</button>
+            <button id="saveSheet" class="btn">Save to Pool</button>
+        </div>
+        <div class="addpage-body">
+            <div id="sheet" class="sheet">
+                <div class="hdr">ID</div>
+                <div class="hdr">Title</div>
+                <div class="hdr">Arrival</div>
+                <div class="hdr">Departure</div>
+                <div class="hdr">Category</div>
+                <!-- rows go here -->
+            </div>
+            <div id="sheetError" style="color:#f87171; margin-top:.5rem; font-size:.875rem;"></div>
+        </div>
+    </section>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
