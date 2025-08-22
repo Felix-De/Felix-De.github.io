@@ -1,0 +1,38 @@
+{
+    "title": "region",
+    "properties": {
+        "CALA": {
+            "bsonType": "string"
+        },
+        "CIS": {
+            "bsonType": "string"
+        },
+        "China": {
+            "bsonType": "string"
+        },
+        "European Union": {
+            "bsonType": "string"
+        },
+        "GCC \u0026 African": {
+            "bsonType": "string"
+        },
+        "India": {
+            "bsonType": "string"
+        },
+        "Other": {
+            "bsonType": "string"
+        },
+        "SEA \u0026 Australia": {
+            "bsonType": "string"
+        },
+        "US \u0026 Canada": {
+            "bsonType": "string"
+        },
+        "_id": {
+            "bsonType": "objectId"
+        }
+    },
+    "required": [
+        "_id"
+    ]
+}

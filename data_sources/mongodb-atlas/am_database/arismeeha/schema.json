@@ -1,0 +1,29 @@
+{
+    "title": "arismeeha",
+    "properties": {
+        "_id": {
+            "bsonType": "objectId"
+        },
+        "contact": {
+            "bsonType": "string"
+        },
+        "email": {
+            "bsonType": "string"
+        },
+        "fullname": {
+            "bsonType": "string"
+        },
+        "id": {
+            "bsonType": "string"
+        },
+        "preferedname": {
+            "bsonType": "string"
+        },
+        "status": {
+            "bsonType": "string"
+        }
+    },
+    "required": [
+        "_id"
+    ]
+}

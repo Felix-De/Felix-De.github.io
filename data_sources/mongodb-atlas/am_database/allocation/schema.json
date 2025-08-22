@@ -1,0 +1,44 @@
+{
+    "title": "allocation",
+    "properties": {
+        "_id": {
+            "bsonType": "objectId"
+        },
+        "arrival": {
+            "bsonType": "string"
+        },
+        "assignedTo": {
+            "bsonType": "objectId"
+        },
+        "departure": {
+            "bsonType": "string"
+        },
+        "guestName": {
+            "bsonType": "string"
+        },
+        "id": {
+            "bsonType": "string"
+        },
+        "lane": {
+            "bsonType": "int"
+        },
+        "notes": {
+            "bsonType": "string"
+        },
+        "region": {
+            "bsonType": "string"
+        },
+        "status": {
+            "bsonType": "string"
+        },
+        "title": {
+            "bsonType": "string"
+        },
+        "villa": {
+            "bsonType": "string"
+        }
+    },
+    "required": [
+        "_id"
+    ]
+}
