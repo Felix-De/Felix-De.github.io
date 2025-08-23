@@ -1,7 +1,7 @@
 :root {
     --row-h: 25px;
     /* lane height */
-    --gap: 14px;
+    --gap: 0.60rem;
     /* space between rows */
     --timeline-w: calc(360*10px);
     /* total horizontal width of the timeline */
@@ -29,6 +29,294 @@
     --soft-grey: #9DB2BF;
     --light-grey: #DDE6ED;
 
+}
+
+
+/* =========================
+   Add Items "Sheet" styling
+   ========================= */
+
+/* Theme tokens (tweak freely) */
+:root {
+    --sheet-bg: #0b1220;
+    /* page background behind the grid */
+    --sheet-panel: #0f172a;
+    /* panel background */
+    --sheet-header-bg: #111827;
+    /* header cells */
+    --sheet-header-text: #e5e7eb;
+    --sheet-border: #1f2937;
+    /* grid lines */
+    --sheet-grid: #233046;
+    /* faint verticals */
+    --sheet-cell-bg: #0f172a;
+    /* cell background */
+    --sheet-cell-alt: #0d1526;
+    /* zebra alt row */
+    --sheet-hover: #1a2340;
+    /* hover row */
+    --sheet-text: #e5e7eb;
+    --sheet-muted: #9ca3af;
+    --sheet-focus: #60a5fa;
+    /* focus ring */
+    --sheet-error: #f87171;
+    --radius: 12px;
+    --shadow: 0 8px 30px rgba(0, 0, 0, .25);
+}
+
+/* Page container */
+#addItemsPage {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    gap: 12px;
+    padding: 12px;
+    background: var(--sheet-bg);
+    height: 100%;
+}
+
+/* Header bar */
+#addItemsPage .addpage-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--sheet-panel);
+    border: 1px solid var(--sheet-border);
+    border-radius: var(--radius);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    box-shadow: var(--shadow);
+}
+
+#addItemsPage .addpage-header .spacer {
+    flex: 1;
+}
+
+/* Body region */
+#addItemsPage .addpage-body {
+    background: var(--sheet-panel);
+    border: 1px solid var(--sheet-border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    display: grid;
+    grid-template-rows: 1fr auto;
+}
+
+/* The "sheet" grid */
+#addItemsPage .sheet {
+    /* 5 columns: ID | Title | Arrival | Departure | Category */
+    display: grid;
+    grid-template-columns: 160px 1fr 160px 160px 200px;
+    align-content: start;
+    color: var(--sheet-text);
+    font-size: 14px;
+    position: relative;
+    overflow: auto;
+    min-height: 360px;
+    /* subtle column dividers */
+    background-image:
+        linear-gradient(to right, var(--sheet-grid) 1px, transparent 1px);
+}
+
+/* Header cells (first 5 children) */
+#addItemsPage .sheet>.hdr {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--sheet-header-bg);
+    color: var(--sheet-header-text);
+    font-weight: 600;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--sheet-border);
+    border-right: 1px solid var(--sheet-border);
+    display: flex;
+    align-items: center;
+    letter-spacing: 0.02em;
+}
+
+#addItemsPage .sheet>.hdr:nth-child(5) {
+    border-right: none;
+}
+
+/* Data cells */
+#addItemsPage .sheet>.sheet-row {
+    background: var(--sheet-cell-bg);
+    padding: 0;
+    /* we pad inputs instead */
+    border-bottom: 1px solid var(--sheet-border);
+    border-right: 1px solid var(--sheet-border);
+    display: flex;
+    align-items: stretch;
+}
+
+#addItemsPage .sheet>.sheet-row:nth-child(5n+5) {
+    border-right: none;
+}
+
+/* last cell in row */
+
+/* Zebra rows:
+   First data row starts at child index 6 (after 5 headers).
+   Every group of 5 cells is a row. */
+#addItemsPage .sheet>.sheet-row:nth-child(5n+6),
+#addItemsPage .sheet>.sheet-row:nth-child(5n+7),
+#addItemsPage .sheet>.sheet-row:nth-child(5n+8),
+#addItemsPage .sheet>.sheet-row:nth-child(5n+9),
+#addItemsPage .sheet>.sheet-row:nth-child(5n+10) {
+    background: var(--sheet-cell-alt);
+}
+
+/* Hover highlight (per cell, lightweight) */
+#addItemsPage .sheet>.sheet-row:hover {
+    background: var(--sheet-hover);
+}
+
+/* Inputs & selects inside cells */
+#addItemsPage .sheet input,
+#addItemsPage .sheet select {
+    width: 100%;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--sheet-text);
+    padding: 10px 12px;
+    font: inherit;
+    border-radius: 0;
+}
+
+/* Date inputs */
+#addItemsPage .sheet input[type="date"] {
+    color-scheme: dark;
+    /* nicer native calendar on dark */
+}
+
+/* Focus ring */
+#addItemsPage .sheet input:focus,
+#addItemsPage .sheet select:focus {
+    box-shadow: inset 0 0 0 2px var(--sheet-focus);
+    border-radius: 6px;
+}
+
+/* Placeholder/muted text */
+#addItemsPage .sheet input::placeholder {
+    color: var(--sheet-muted);
+}
+
+/* Select styling */
+#addItemsPage .sheet select {
+    appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--sheet-muted) 50%),
+        linear-gradient(135deg, var(--sheet-muted) 50%, transparent 50%);
+    background-position:
+        calc(100% - 16px) calc(50% - 4px),
+        calc(100% - 12px) calc(50% + 0px);
+    background-size: 6px 6px, 6px 6px;
+    background-repeat: no-repeat;
+    padding-right: 28px;
+}
+
+/* Error text below the grid */
+#sheetError {
+    color: var(--sheet-error);
+    padding: 10px 12px 12px;
+    border-top: 1px solid var(--sheet-border);
+    font-size: 13px;
+}
+
+/* Buttons in header (just some polish) */
+#addItemsPage .addpage-header .btn {
+    background: #1f2937;
+    color: var(--sheet-text);
+    border: 1px solid var(--sheet-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform .08s ease, background .2s ease, border-color .2s ease;
+}
+
+#addItemsPage .addpage-header .btn:hover {
+    background: #24324a;
+    border-color: #2a3a57;
+}
+
+#addItemsPage .addpage-header .btn:active {
+    transform: translateY(1px);
+}
+
+#addItemsPage .addpage-header .btn[disabled] {
+    opacity: .6;
+    cursor: not-allowed;
+}
+
+/* Row numbers (auto) — shown in the first cell of each data row */
+#addItemsPage .sheet {
+    counter-reset: sheetrow;
+}
+
+#addItemsPage .sheet>.sheet-row:nth-child(5n+6) {
+    counter-increment: sheetrow;
+}
+
+#addItemsPage .sheet>.sheet-row:nth-child(5n+6)::before {
+    content: counter(sheetrow);
+    color: var(--sheet-muted);
+    font-variant-numeric: tabular-nums;
+    position: absolute;
+    transform: translateX(-28px);
+    padding-right: 6px;
+}
+
+/* Make the grid scrollable with nice scrollbars */
+#addItemsPage .sheet::-webkit-scrollbar {
+    height: 10px;
+    width: 10px;
+}
+
+#addItemsPage .sheet::-webkit-scrollbar-thumb {
+    background: #24324a;
+    border-radius: 6px;
+}
+
+#addItemsPage .sheet::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+/* Responsive tweaks */
+@media (max-width: 1200px) {
+    #addItemsPage .sheet {
+        grid-template-columns: 140px 1fr 150px 150px 180px;
+    }
+}
+
+@media (max-width: 900px) {
+    #addItemsPage .sheet {
+        grid-template-columns: 120px 1fr 140px 140px 160px;
+        font-size: 13px;
+    }
+}
+
+@media (max-width: 700px) {
+    #addItemsPage .sheet {
+        grid-template-columns: 110px 1fr 130px 130px 150px;
+        font-size: 12px;
+    }
+}
+
+.row-del {
+    border: 1px solid var(--sheet-border, #1f2937);
+    background: #1f2937;
+    color: #e5e7eb;
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+}
+
+.row-del:hover {
+    background: #2a3a57;
 }
 
 * {
@@ -190,7 +478,7 @@ select.input {
         "footer footer footer";
     grid-template-columns: var(--pool-wide) 1fr var(--pool-wide);
     /* two main cols + drawer */
-    grid-template-rows: 1fr 1fr auto var(--cell);
+    grid-template-rows: 4rem 2.5rem auto var(--cell);
     /* toolbar auto height, rest fills */
     height: 100vh;
     /* ensures full-page grid */
@@ -243,6 +531,10 @@ body.pool-left #app.drawer-collapsed {
     overflow: auto;
     /* both x + y scrolling here */
     padding: 0 var(--pad);
+    scrollbar-width: none;
+    /* Firefox */
+    -ms-overflow-style: none;
+    /* IE & Edge */
 }
 
 /* --- Pool drawer - sidebar */
@@ -335,18 +627,14 @@ body.pool-left #app.drawer-collapsed {
     position: relative;
     display: grid;
     grid-auto-rows: auto;
-    row-gap: var(--gap);
-    /* horizontal width to enable X-scroll */
 }
 
 /* One row per person */
 .person {
     position: relative;
     display: grid;
-    grid-template-rows: auto auto;
+    grid-template-rows: 1fr auto;
     /* header, then lanes; both hug content */
-    row-gap: 8px;
-    /* space between header and lanes */
 }
 
 /* Center-locked header (sticks to viewport center while this row is visible) */
@@ -357,19 +645,20 @@ body.pool-left #app.drawer-collapsed {
 .person-head {
     position: sticky;
     /* pin to viewport center (of the scroll container) */
-    left: 10%;
-    transform: translateX(-50%);
-    z-index: 2;
-    min-width: 200px;
+    left: 0;
+    transform: translateY(20px);
+    z-index: 0;
+    min-width: calc(31px*11);
+    min-height: 3.5rem;
 
     /* styling */
     display: inline-flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     padding: .5rem .8rem;
-    background-color: var(--panel);
+    background-color: var(--dark-grey);
     color: #fff;
-    border-radius: var(--radius);
+    border-radius: var(--radius) var(--radius) 0 0;
     font: 600 14px/1.2 system-ui, sans-serif;
     white-space: nowrap;
     pointer-events: none;
@@ -419,8 +708,8 @@ body.pool-left #app.drawer-collapsed {
 .ghost-bar {
     position: absolute;
     top: .05rem;
-    height: calc(var(--row-h) - .1rem);
-    border-radius: var(--radius);
+    height: calc(var(--row-h) - 2px);
+    border-radius: .2rem;
     color: #fff;
     font-size: .75rem;
     padding: .15rem .3rem;
@@ -505,6 +794,40 @@ body.pool-left #app.drawer-collapsed {
     cursor: grabbing;
 }
 
+.item-card .mini-btn {
+    border: 1px solid rgba(255, 255, 255, .25);
+    background: rgba(0, 0, 0, .15);
+    color: inherit;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: .75rem;
+    cursor: pointer;
+}
+
+.item-card .mini-btn:hover {
+    background: rgba(0, 0, 0, .25);
+}
+
+.item-card .in {
+    width: 100%;
+    border: none;
+    outline: none;
+    border-radius: 6px;
+    padding: 6px 8px;
+    background: rgba(255, 255, 255, .08);
+    color: inherit;
+}
+
+.item-card .row {
+    display: flex;
+    align-items: center;
+}
+
+.item-card .col {
+    display: flex;
+    flex-direction: column;
+}
+
 .pool-footer {
     border-top: var(--border);
     padding: .5rem;
@@ -527,4 +850,81 @@ body.pool-left #app.drawer-collapsed {
 
 .edit-mode .footer-text {
     color: whitesmoke;
+}
+
+/* --- Today & User overlay lines (high z-index, top triangles) --- */
+.overlay-line {
+    position: absolute;
+    width: 0;
+    pointer-events: none;
+    z-index: 50;
+    border-left: 2px solid #111827;
+}
+
+.overlay-line.today {
+    border-left-style: dotted;
+    border-left-color: var(--line-today);
+}
+
+.overlay-line.user {
+    border-left-style: solid;
+    border-left-color: var(--line-user);
+}
+
+.overlay-tip {
+    position: absolute;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+    z-index: 51;
+    /* triangle; positions (left/top) are set from JS */
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 7px solid #111827;
+}
+
+.overlay-tip.today {
+    border-bottom-color: var(--line-today);
+}
+
+.overlay-tip.user {
+    border-bottom-color: var(--line-user);
+}
+
+/* --- Off Day mark (full-column bookmark under bars) --- */
+.offday-mark {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    background:
+        repeating-linear-gradient(45deg,
+            transparent 0 8px,
+            var(--offday-stripe) 8px 16px),
+        var(--offday-bg);
+    border-left: 1px solid var(--offday-border);
+    border-right: 1px solid var(--offday-border);
+    border-radius: 6px;
+    z-index: 1;
+    /* below .bar (which is z=2 in JS) */
+    pointer-events: none;
+}
+
+/* visual feedback when offday placement blocked */
+.offday-blocked {
+    outline: 2px solid rgba(239, 68, 68, .55);
+    animation: offday-blink .35s ease-in-out 2;
+}
+
+@keyframes offday-blink {
+    0% {
+        background-color: transparent;
+    }
+
+    50% {
+        background-color: rgba(239, 68, 68, .06);
+    }
+
+    100% {
+        background-color: transparent;
+    }
 }
