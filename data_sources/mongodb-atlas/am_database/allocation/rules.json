@@ -3,11 +3,15 @@
     "collection": "allocation",
     "roles": [
         {
-            "name": "readAndWriteAll",
+            "name": "readOwnWriteOwn",
             "apply_when": {},
             "document_filters": {
-                "read": true,
-                "write": true
+                "read": {
+                    "owner_id": "%%user.id"
+                },
+                "write": {
+                    "owner_id": "%%user.id"
+                }
             },
             "insert": true,
             "delete": true,
