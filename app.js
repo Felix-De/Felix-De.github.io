@@ -1,278 +1,243 @@
 /* =========================
    AM Allocation — app.js (client-only, no Node)
-   - Requires: <script src="https://unpkg.com/realm-web/dist/bundle.iife.js"></script>
-   - Put this file after the SDK in your HTML: <script defer src="./app.js"></script>
-   - Update CONFIG below to match your Atlas App Services app & DB.
+   Requires:
+     <script src="https://unpkg.com/realm-web/dist/bundle.iife.js"></script>
+     <script defer src="./app.js"></script>
    ========================= */
 
-// ===== Atlas App Services config =====
+/* ====== CONFIG ====== */
 const CONFIG = {
-    appId: "amallocation-tgczmjh",             // Your App Services Client App ID
-    baseUrl: "https://services.cloud.mongodb.com",
-    service: "mongodb-atlas",                  // default service name
-    db: "am_database",                        // your DB
-    col: { people: "arismeeha", regions: "region", allocs: "allocation" },
-    auth: { mode: "anonymous" }                // dev: "anonymous"; prod: { mode:"email", email:"", password:"" }
+  appId: "amallocation-tgczmjh",
+  baseUrl: "https://ap-southeast-1.aws.services.cloud.mongodb.com",
+  service: "mongodb-atlas",
+  db: "am_database",
+  col: { people: "arismeeha", regions: "region", allocs: "allocation" },
+  auth: { mode: "anonymous", email: "", password: "" }
 };
 
-// ===== Atlas helpers =====
+/* ====== Logging helpers ====== */
+const L = {
+  pfx: "[AM-Alloc]",
+  info: (...a) => console.info("[AM-Alloc]", ...a),
+  warn: (...a) => console.warn("[AM-Alloc]", ...a),
+  error: (...a) => console.error("[AM-Alloc]", ...a)
+};
+
+/* ====== Realm init ====== */
 const realmApp = new Realm.App({ id: CONFIG.appId, baseUrl: CONFIG.baseUrl });
 
+function getCredentials() {
+  return CONFIG.auth.mode === "email"
+    ? Realm.Credentials.emailPassword(CONFIG.auth.email, CONFIG.auth.password)
+    : Realm.Credentials.anonymous();
+}
+function isInvalidSession(err) {
+  return (err && err.error_code === "InvalidSession") ||
+         (err && /InvalidSession|invalid session|401/.test(String(err)));
+}
+async function ensureLogin() {
+  if (realmApp.currentUser?.isLoggedIn) return realmApp.currentUser;
+  return realmApp.logIn(getCredentials());
+}
 async function getDB() {
-    if (!realmApp.currentUser) {
-        if (CONFIG.auth.mode === "email") {
-            await realmApp.logIn(Realm.Credentials.emailPassword(CONFIG.auth.email, CONFIG.auth.password));
-        } else {
-            await realmApp.logIn(Realm.Credentials.anonymous());
-        }
-    }
-    return realmApp.currentUser.mongoClient(CONFIG.service).db(CONFIG.db);
+  try {
+    const user = await ensureLogin();
+    return user.mongoClient(CONFIG.service).db(CONFIG.db);
+  } catch {
+    try { if (realmApp.currentUser) await realmApp.currentUser.logOut(); } catch {}
+    try { await Promise.all(Object.values(realmApp.allUsers).map(u => realmApp.deleteUser(u))); } catch {}
+    const user = await realmApp.logIn(getCredentials());
+    return user.mongoClient(CONFIG.service).db(CONFIG.db);
+  }
+}
+async function withDB(fn) {
+  try {
+    const db = await getDB();
+    return await fn(db);
+  } catch (err) {
+    if (!isInvalidSession(err)) throw err;
+    try { if (realmApp.currentUser) await realmApp.currentUser.logOut(); } catch {}
+    try { await Promise.all(Object.values(realmApp.allUsers).map(u => realmApp.deleteUser(u))); } catch {}
+    const db2 = (await realmApp.logIn(getCredentials())).mongoClient(CONFIG.service).db(CONFIG.db);
+    return await fn(db2);
+  }
 }
 
+/* ====== Time & utils ====== */
+const DAY = 24 * 60 * 60 * 1000;
+const clampNoon = d => { const x = new Date(d); x.setHours(12,0,0,0); return x; };
+const addDays = (d,n) => { const x = new Date(d); x.setDate(x.getDate()+n); return clampNoon(x); };
+const startOfMonth = d => clampNoon(new Date(d.getFullYear(), d.getMonth(), 1));
+const endOfMonth   = d => clampNoon(new Date(d.getFullYear(), d.getMonth()+1, 0));
+const daysInclusive = (a,b) => Math.floor((clampNoon(b) - clampNoon(a))/DAY) + 1;
 const isoToDate = v => (v instanceof Date ? v : new Date(v));
 
-async function atlasLoadPeople(db) {
-    const docs = await db.collection(CONFIG.col.people)
-        .find({ status: "active" }, { sort: { fullname: 1 } });
-    const people = docs.map(d => ({
-        _id: d._id, id: d.id,
-        fullname: d.fullname,
-        preferredName: d.preferredName || d.fullname
-    }));
-    const idxByOid = Object.fromEntries(people.map((p, i) => [String(p._id), i]));
-    return { people, idxByOid };
+function keyifyObjectId(x) {
+  if (x && typeof x === 'object' && typeof x.toHexString === 'function') return x.toHexString().toLowerCase();
+  if (x && typeof x === 'object' && typeof x.$oid === 'string') return x.$oid.toLowerCase();
+  const s = String(x);
+  const m = s.match(/[a-f0-9]{24}/i);
+  return (m ? m[0] : s).toLowerCase();
 }
 
-async function atlasLoadRegions(db) {
-    const docs = await db.collection(CONFIG.col.regions)
-        .find({ active: true }, { sort: { order: 1 } });
-    return Object.fromEntries(docs.map(r => [r.name, r.color]));
-}
-
-async function atlasLoadAllocations(db, fromDate, toDate) {
-    const Alloc = db.collection(CONFIG.col.allocs);
-    const assigned = await Alloc.find({
-        status: "assigned",
-        arrival: { $lt: toDate.toISOString() },
-        departure: { $gt: fromDate.toISOString() }
-    });
-    const pending = await Alloc.find({ status: "pending" }, { sort: { arrival: 1 } });
-    assigned.forEach(a => { a.arrival = isoToDate(a.arrival); a.departure = isoToDate(a.departure); });
-    pending.forEach(a => { a.arrival = isoToDate(a.arrival); a.departure = isoToDate(a.departure); });
-    return { assigned, pending };
-}
-
-async function atlasAssignAllocation(appId, personOid, laneIndex) {
-    const db = await getDB();
-    await db.collection(CONFIG.col.allocs).updateOne(
-        { id: appId },
-        {
-            $set: {
-                status: "assigned",
-                assignedTo: new Realm.BSON.ObjectId(String(personOid)),
-                lane: laneIndex,
-                updatedAt: new Date().toISOString()
-            },
-            $inc: { version: 1 }
-        }
-    );
-}
-
-async function atlasUnassignAllocation(appId) {
-    const db = await getDB();
-    await db.collection(CONFIG.col.allocs).updateOne(
-        { id: appId },
-        {
-            $set: {
-                status: "pending",
-                assignedTo: null,
-                lane: null,
-                updatedAt: new Date().toISOString()
-            },
-            $inc: { version: 1 }
-        }
-    );
-}
-
-async function atlasCreateAllocations(docs) {
-    const db = await getDB();
-    await db.collection(CONFIG.col.allocs).insertMany(docs);
-}
-
-// ===== Time/date utilities =====
-const DAY = 24 * 60 * 60 * 1000;
-const clampNoon = d => { const x = new Date(d); x.setHours(12, 0, 0, 0); return x; };
-const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return clampNoon(x); };
-const startOfMonth = d => clampNoon(new Date(d.getFullYear(), d.getMonth(), 1));
-const endOfMonth = d => clampNoon(new Date(d.getFullYear(), d.getMonth() + 1, 0));
-const daysInclusive = (a, b) => Math.floor((clampNoon(b) - clampNoon(a)) / DAY) + 1;
-
-// ===== State =====
-let viewMode = "YEAR";                         // 'YEAR' | 'THREE' | 'MONTH'
+/* ====== State ====== */
+let viewMode = "YEAR";
 let focusDate = clampNoon(new Date());
 let columns = [];
 let editMode = false;
 let poolCollapsed = false;
 
-let COUNTRY_COLORS = {};                       // filled by Atlas
-let demoPeople = [];                           // filled by Atlas
-let pool = [];                                 // pending (drawer), filled by Atlas
-let alloc = [];                                // [personIdx][lane] -> items, filled by Atlas
-let peopleDocs = [];                           // full people documents (with _id)
-let personIdxByOid = {};                       // { "<oid>": index }
+let COUNTRY_COLORS = { Other: "#94a3b8" }; // fallback
+let peopleDocs = [];          // all people docs
+let demoPeople = [];          // names to display (actives preferred)
+let personIdxByOid = {};      // _id hex -> index
+let pool = [];                // pending items
+let alloc = [];               // [personIdx][laneIdx] = items[]
 
-// ===== DOM =====
+/* ====== DOM ====== */
 const $ = sel => document.querySelector(sel);
-const app = $("#app");
-const timeline = $("#timeline-header");
 const datesGrid = $("#datesGrid");
+const timeline = $("#timeline-header");
 const peopleWrap = $("#board");
 const hHeader = document.getElementById('timeline-header');
 const hBody = document.getElementById('board');
 
-// ===== Toolbar actions =====
+/* ====== Toolbar ====== */
 $("#viewSelect")?.addEventListener('change', () => { viewMode = $("#viewSelect").value; renderDates(); renderPeople(); syncWidths(); scrollToCurrentMonthIfYear(); });
-$("#prevMonth")?.addEventListener('click', () => { focusDate.setMonth(focusDate.getMonth() - 1); renderDates(); renderPeople(); syncWidths(); scrollToCurrentMonthIfYear(); });
-$("#nextMonth")?.addEventListener('click', () => { focusDate.setMonth(focusDate.getMonth() + 1); renderDates(); renderPeople(); syncWidths(); scrollToCurrentMonthIfYear(); });
+$("#prevMonth")?.addEventListener('click', () => { focusDate.setMonth(focusDate.getMonth()-1); renderDates(); renderPeople(); syncWidths(); scrollToCurrentMonthIfYear(); });
+$("#nextMonth")?.addEventListener('click', () => { focusDate.setMonth(focusDate.getMonth()+1); renderDates(); renderPeople(); syncWidths(); scrollToCurrentMonthIfYear(); });
 $("#toggleEdit")?.addEventListener('click', () => {
-    editMode = !editMode;
-    document.body.classList.toggle('edit-mode', editMode);
-    $("#toggleEdit").textContent = editMode ? 'View' : 'Edit';
-    const ft = $("#footer .footer-text span"); if (ft) ft.textContent = editMode ? 'Edit Mode: Press save to save progress' : 'View Mode';
-    renderPool(); renderPeople();
+  editMode = !editMode;
+  document.body.classList.toggle('edit-mode', editMode);
+  $("#toggleEdit").textContent = editMode ? 'View' : 'Edit';
+  const ft = $("#footer .footer-text span"); if (ft) ft.textContent = editMode ? 'Edit Mode: Press save to save progress' : 'View Mode';
+  renderPool(); renderPeople();
 });
 $("#btnSave")?.addEventListener('click', () => { editMode = false; document.body.classList.remove('edit-mode'); $("#toggleEdit").textContent = 'Edit'; renderPool(); renderPeople(); });
 $("#btnCollapsePool")?.addEventListener('click', () => { poolCollapsed = !poolCollapsed; $("#app").classList.toggle('drawer-collapsed', poolCollapsed); $("#drawer").classList.toggle('show', poolCollapsed); renderPool(); });
 $("#flipSide")?.addEventListener('click', () => { document.body.classList.toggle('pool-left'); });
 
-// ==== Sync horizontal scroll between header and body
+/* ====== Sync header/body scroll ====== */
 let syncing = false;
 hHeader?.addEventListener('scroll', () => { if (syncing) return; syncing = true; if (hBody) hBody.scrollLeft = hHeader.scrollLeft; syncing = false; });
 hBody?.addEventListener('scroll', () => { if (syncing) return; syncing = true; if (hHeader) hHeader.scrollLeft = hBody.scrollLeft; syncing = false; });
 
-// ===== Dates/columns =====
+/* ====== Dates/columns ====== */
 function setMonthLabel(d) {
-    const el = document.getElementById('monthLabel');
-    if (el) el.textContent = d.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+  const el = document.getElementById('monthLabel');
+  if (el) el.textContent = d.toLocaleString(undefined, { month: 'long', year: 'numeric' });
 }
-
 function buildColumns() {
-    let start, end; const now = new Date(focusDate);
-    if (viewMode === 'YEAR') { start = new Date(now.getFullYear(), 0, 1); end = new Date(now.getFullYear(), 11, 31); }
-    else if (viewMode === 'THREE') { start = new Date(now.getFullYear(), now.getMonth() - 1, 1); end = new Date(now.getFullYear(), now.getMonth() + 1, 0); }
-    else { start = startOfMonth(now); end = endOfMonth(now); }
-    start = clampNoon(start); end = clampNoon(end);
-    const days = Math.floor((end - start) / DAY) + 1;
-    columns = Array.from({ length: days }, (_, i) => addDays(start, i));
-    setMonthLabel(now);
+  const now = new Date(focusDate);
+  let start, end;
+  if (viewMode === 'YEAR') { start = new Date(now.getFullYear(),0,1); end = new Date(now.getFullYear(),11,31); }
+  else if (viewMode === 'THREE') { start = new Date(now.getFullYear(), now.getMonth()-1, 1); end = new Date(now.getFullYear(), now.getMonth()+1, 0); }
+  else { start = startOfMonth(now); end = endOfMonth(now); }
+  const s = clampNoon(start), e = clampNoon(end);
+  columns = Array.from({ length: Math.floor((e - s)/DAY) + 1 }, (_,i) => addDays(s, i));
+  setMonthLabel(now);
 }
-
 function renderDates() {
-    buildColumns();
-    if (!datesGrid) return;
-    datesGrid.style.gridTemplateColumns = `repeat(${columns.length}, var(--cell))`;
-    datesGrid.innerHTML = columns.map(d => `
+  buildColumns();
+  if (!datesGrid) return;
+  datesGrid.style.gridTemplateColumns = `repeat(${columns.length}, var(--cell))`;
+  datesGrid.innerHTML = columns.map(d => `
     <div class="date-cell">
       <div class="date-num">${d.getDate()}</div>
       <div class="date-mon">${d.toLocaleString(undefined, { month: 'short' })}</div>
     </div>`).join('');
 }
-
 function scrollToCurrentMonthIfYear() {
-    if (viewMode !== 'YEAR' || columns.length === 0) return;
-    const now = new Date(focusDate);
-    const jan1 = clampNoon(new Date(now.getFullYear(), 0, 1));
-    const m0 = clampNoon(new Date(now.getFullYear(), now.getMonth(), 1));
-    const offsetDays = Math.max(0, Math.floor((m0 - jan1) / DAY));
-    const cellEl = document.querySelector('.date-cell');
-    const w = cellEl ? cellEl.getBoundingClientRect().width : 30;
-    const target = offsetDays * w;
-    if (hHeader && hBody) { hHeader.scrollLeft = target; hBody.scrollLeft = target; }
+  if (viewMode !== 'YEAR' || columns.length === 0) return;
+  const now = new Date(focusDate);
+  const jan1 = clampNoon(new Date(now.getFullYear(), 0, 1));
+  const m0 = clampNoon(new Date(now.getFullYear(), now.getMonth(), 1));
+  const offsetDays = Math.max(0, Math.floor((m0 - jan1) / DAY));
+  const cellEl = document.querySelector('.date-cell');
+  const w = cellEl ? cellEl.getBoundingClientRect().width : 30;
+  const target = offsetDays * w;
+  if (hHeader && hBody) { hHeader.scrollLeft = target; hBody.scrollLeft = target; }
 }
 
-// ===== Item utilities =====
-function overlaps(a, b) {
-    const aS = clampNoon(a.arrival).getTime(), aE = clampNoon(a.departure).getTime();
-    const bS = clampNoon(b.arrival).getTime(), bE = clampNoon(b.departure).getTime();
-    return !(aE <= bS || bE <= aS);
+/* ====== Items & colors ====== */
+function overlaps(a,b) {
+  const aS = clampNoon(a.arrival).getTime(), aE = clampNoon(a.departure).getTime();
+  const bS = clampNoon(b.arrival).getTime(), bE = clampNoon(b.departure).getTime();
+  return !(aE <= bS || bE <= aS);
 }
 function withinView(it) {
-    if (!columns.length) return true;
-    const vs = clampNoon(columns[0]).getTime();
-    const ve = clampNoon(columns[columns.length - 1]).getTime();
-    const s = clampNoon(it.arrival).getTime();
-    const e = clampNoon(it.departure).getTime();
-    return !(e < vs || s > ve);
+  if (!columns.length) return true;
+  const vs = clampNoon(columns[0]).getTime();
+  const ve = clampNoon(columns[columns.length-1]).getTime();
+  const s = clampNoon(it.arrival).getTime();
+  const e = clampNoon(it.departure).getTime();
+  return !(e < vs || s > ve);
 }
 function colorFor(cat) { return COUNTRY_COLORS[cat] || COUNTRY_COLORS.Other || "#94a3b8"; }
 
-// ===== DnD helpers =====
-let dragItemId = null; let dragSource = null;
-
+/* ====== DnD ====== */
+let dragSource = null;
 function makeDraggable(el, item) {
-    if (!el) return;
-    if (editMode) {
-        el.setAttribute('draggable', 'true');
-        el.onDragStartHandler = () => { dragItemId = item.id; dragSource = { type: 'pool', itemRef: item }; };
-        el.onDragEndHandler = () => { dragItemId = null; dragSource = null; removeGhosts(); };
-        el.addEventListener('dragstart', el.onDragStartHandler);
-        el.addEventListener('dragend', el.onDragEndHandler);
-    } else {
-        el.removeAttribute('draggable');
-        if (el.onDragStartHandler) { el.removeEventListener('dragstart', el.onDragStartHandler); el.onDragStartHandler = null; }
-        if (el.onDragEndHandler) { el.removeEventListener('dragend', el.onDragEndHandler); el.onDragEndHandler = null; }
-    }
+  if (!el) return;
+  if (editMode) {
+    el.setAttribute('draggable', 'true');
+    el.onDragStartHandler = () => { dragSource = { type: 'pool', itemRef: item }; };
+    el.onDragEndHandler = () => { dragSource = null; removeGhosts(); };
+    el.addEventListener('dragstart', el.onDragStartHandler);
+    el.addEventListener('dragend', el.onDragEndHandler);
+  } else {
+    el.removeAttribute('draggable');
+    if (el.onDragStartHandler) { el.removeEventListener('dragstart', el.onDragStartHandler); el.onDragStartHandler = null; }
+    if (el.onDragEndHandler) { el.removeEventListener('dragend', el.onDragEndHandler); el.onDragEndHandler = null; }
+  }
 }
 function allowDrop(ev) { ev.preventDefault(); }
 function removeGhosts() { document.querySelectorAll('.ghost-bar').forEach(g => g.remove()); }
 function showGhost(laneEl, _startDate, item) {
-    removeGhosts();
-    const startOffset = Math.max(0, Math.floor((clampNoon(item.arrival) - clampNoon(columns[0])) / DAY));
-    const len = daysInclusive(item.arrival, item.departure);
-    const endOffset = Math.min(columns.length - 1, startOffset + len - 1);
-    const span = Math.max(1, endOffset - startOffset + 1);
-    const ghost = document.createElement('div');
-    ghost.className = 'ghost-bar';
-    ghost.style.left = `calc(${startOffset} * var(--cell))`;
-    ghost.style.width = `calc(${span} * var(--cell))`;
-    ghost.style.background = colorFor(item.category);
-    ghost.textContent = item.title;
-    laneEl.appendChild(ghost);
+  removeGhosts();
+  const startOffset = Math.max(0, Math.floor((clampNoon(item.arrival) - clampNoon(columns[0])) / DAY));
+  const len = daysInclusive(item.arrival, item.departure);
+  const endOffset = Math.min(columns.length - 1, startOffset + len - 1);
+  const span = Math.max(1, endOffset - startOffset + 1);
+  const ghost = document.createElement('div');
+  ghost.className = 'ghost-bar';
+  ghost.style.left = `calc(${startOffset} * var(--cell))`;
+  ghost.style.width = `calc(${span} * var(--cell))`;
+  ghost.style.background = colorFor(item.category);
+  ghost.textContent = item.title;
+  laneEl.appendChild(ghost);
 }
 
-// ===== Placement (lanes) =====
-function placeItem(personIdx, dropDate, item) {
-    // Note: currently ignoring dropDate; uses item's own arrival/departure.
-    if (!editMode) return false;
-    if (!alloc[personIdx]) alloc[personIdx] = [[]];
-    if (alloc[personIdx].length === 0) alloc[personIdx] = [[]];
-    const laneCount = alloc[personIdx].length;
-    for (let lane = 0; lane < laneCount; lane++) {
-        const laneArr = alloc[personIdx][lane];
-        const sorted = laneArr.slice().sort((a, b) => a.arrival - b.arrival);
-        if (sorted.some(x => overlaps(item, x))) continue;
-        laneArr.push(item);
-        pool = pool.filter(p => p.id !== item.id);
-        renderPool(); renderPeople();
-        return true;
+/* ====== Shape guards ====== */
+function ensureAllocShape(numPeople) {
+  if (!Array.isArray(alloc)) alloc = [];
+  if (!Number.isInteger(numPeople) || numPeople < 0) numPeople = 0;
+  while (alloc.length < numPeople) alloc.push([]);
+  if (alloc.length > numPeople) alloc.length = numPeople;
+  for (let i = 0; i < alloc.length; i++) {
+    if (!Array.isArray(alloc[i])) alloc[i] = [];
+    if (alloc[i].length === 0) alloc[i] = [[]];
+    for (let l = 0; l < alloc[i].length; l++) {
+      if (!Array.isArray(alloc[i][l])) alloc[i][l] = [];
     }
-    if (alloc[personIdx].length < 10) { alloc[personIdx].push([]); return placeItem(personIdx, dropDate, item); }
-    return false;
+  }
 }
 
-// ===== Pool rendering =====
+/* ====== Drawer (pool) ====== */
 function renderPool() {
-    const panel = document.getElementById('panelPending');
-    if (!panel) return;
-    panel.innerHTML = '';
-    const list = pool.slice().sort((a, b) => a.arrival - b.arrival);
+  const panel = document.getElementById('panelPending');
+  if (!panel) return;
+  panel.innerHTML = '';
+  const list = pool.slice().sort((a,b) => a.arrival - b.arrival);
 
-    list.forEach(it => {
-        const card = document.createElement('div');
-        card.className = 'item-card';
-        card.style.borderColor = colorFor(it.category);
-        card.style.background = colorFor(it.category);
-        card.innerHTML = `
+  list.forEach(it => {
+    const card = document.createElement('div');
+    card.className = 'item-card';
+    // Use category color
+    const c = colorFor(it.category);
+    card.style.borderColor = c;
+    card.style.background = c;
+    card.innerHTML = `
       <div class="row" style="justify-content:space-between; font-weight:600; font-size:.875rem;">
         <span class="truncate" title="${it.title}">${it.title}</span>
       </div>
@@ -281,274 +246,417 @@ function renderPool() {
         → ${it.departure.toLocaleDateString(undefined, { day: '2-digit', month: 'short' })}
       </div>
       <div style="font-size:.7rem; color:var(--muted); margin-top:.125rem">ID: ${it.id}</div>`;
-        panel.appendChild(card);
-        makeDraggable(card, it);
-    });
-    if (list.length === 0) {
-        const empty = document.createElement('div');
-        empty.style.cssText = 'font-size:.9rem; color:var(--muted); margin:.5rem 0;';
-        empty.textContent = 'No pending villa allocations';
-        panel.appendChild(empty);
-    }
+    panel.appendChild(card);
+    makeDraggable(card, it);
+  });
 
-    // populate categories in add-item sheet
-    const catSel = document.getElementById('addCategory');
-    if (catSel) { catSel.innerHTML = Object.keys(COUNTRY_COLORS).map(k => `<option value="${k}">${k}</option>`).join(''); }
+  if (list.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'font-size:.9rem; color:var(--muted); margin:.5rem 0;';
+    empty.textContent = 'No pending villa allocations';
+    panel.appendChild(empty);
+  }
+
+  // Populate category dropdowns (if present)
+  const catSel = document.getElementById('addCategory');
+  if (catSel) {
+    catSel.innerHTML = Object.keys(COUNTRY_COLORS)
+      .map(k => `<option value="${k}">${k}</option>`).join('');
+  }
 }
 
-// ===== People & lanes rendering =====
+/* ====== People & lanes ====== */
 function renderPeople() {
-    if (!peopleWrap) return;
-    peopleWrap.innerHTML = '';
-    demoPeople.forEach((name, personIdx) => {
-        if (!alloc[personIdx]) alloc[personIdx] = [[]];
-        if (alloc[personIdx].length === 0) alloc[personIdx] = [[]];
-        const person = document.createElement('section'); person.className = 'person';
-        person.innerHTML = `
+  if (!peopleWrap) return;
+  ensureAllocShape(peopleDocs.length); // match people docs length
+  peopleWrap.innerHTML = '';
+
+  // We render rows for demoPeople; map to peopleDocs indices by name
+  // To keep things simple: demoPeople is a filtered list in the same order as peopleDocs for actives first.
+  // We'll render in peopleDocs order but only show if status active (or if demoPeople includes it).
+  const showIdx = peopleDocs
+    .map((p, idx) => ({ idx, active: /active/i.test(String(p.status||"")) }))
+    .filter(o => o.active || demoPeople.includes(peopleDocs[o.idx].preferredName || peopleDocs[o.idx].fullname));
+
+  showIdx.forEach(({ idx: personIdx }) => {
+    if (!alloc[personIdx]) alloc[personIdx] = [[]];
+    if (alloc[personIdx].length === 0) alloc[personIdx] = [[]];
+
+    const name = peopleDocs[personIdx].preferredName || peopleDocs[personIdx].fullname || "Unknown";
+
+    const person = document.createElement('section'); person.className = 'person';
+    person.innerHTML = `
       <div class="head"><div class="person-head">
         <div class="person-name">${name}</div>
         <div style="font-size:.75rem; color:var(--muted)">Lanes: ${alloc[personIdx].length}</div>
       </div></div>`;
 
-        const lanesWrap = document.createElement('div'); lanesWrap.className = 'lanes';
-        lanesWrap.style.width = `calc(${columns.length} * var(--cell))`;
+    const lanesWrap = document.createElement('div'); lanesWrap.className = 'lanes';
+    lanesWrap.style.width = `calc(${columns.length} * var(--cell))`;
 
-        alloc[personIdx].forEach((laneArr, laneIdx) => {
-            const lane = document.createElement('div'); lane.className = 'lane';
-            const laneGrid = document.createElement('div'); laneGrid.className = 'lane-grid';
-            laneGrid.style.gridTemplateColumns = `repeat(${columns.length}, var(--cell))`;
-            columns.forEach(d => {
-                const cell = document.createElement('div'); cell.className = 'lane-cell';
-                cell.addEventListener('dragover', (ev) => { if (!editMode) return; allowDrop(ev); const itm = (dragSource && dragSource.itemRef) || null; if (!itm) return; showGhost(lane, d, itm); });
-                cell.addEventListener('dragleave', () => { removeGhosts(); });
-                cell.addEventListener('drop', (ev) => {
-                    if (!editMode) return; ev.preventDefault();
-                    let movingItem = null; const from = dragSource;
-                    if (dragSource && dragSource.type === 'pool') { movingItem = dragSource.itemRef; }
-                    else if (dragSource && dragSource.type === 'placed') {
-                        const srcLane = alloc[dragSource.personIdx][dragSource.laneIdx];
-                        const idx = srcLane.indexOf(dragSource.itemRef);
-                        if (idx > -1) srcLane.splice(idx, 1);
-                        movingItem = dragSource.itemRef;
-                    }
-                    let ok = false; if (movingItem) ok = placeItem(personIdx, d, movingItem);
-                    if (ok) {
-                        // Persist via Atlas
-                        const personDoc = peopleDocs[personIdx];
-                        atlasAssignAllocation(movingItem.id, personDoc?._id, laneIdx).catch(err => {
-                            console.error("Save failed:", err);
-                            // Revert UI on failure
-                            const laneRef = alloc[personIdx][laneIdx];
-                            const i = laneRef.indexOf(movingItem);
-                            if (i > -1) laneRef.splice(i, 1);
-                            pool.push(movingItem);
-                            renderPool(); renderPeople();
-                        });
-                    } else if (!ok && from && from.type === 'placed') {
-                        // revert if move failed
-                        alloc[from.personIdx][from.laneIdx].push(movingItem);
-                        renderPeople();
-                    }
-                    dragItemId = null; dragSource = null; removeGhosts();
-                });
-                laneGrid.appendChild(cell);
-            });
-            lane.appendChild(laneGrid);
+    alloc[personIdx].forEach((laneArr, laneIdx) => {
+      const lane = document.createElement('div'); lane.className = 'lane';
+      const laneGrid = document.createElement('div'); laneGrid.className = 'lane-grid';
+      laneGrid.style.gridTemplateColumns = `repeat(${columns.length}, var(--cell))`;
 
-            laneArr.filter(withinView).forEach((it) => {
-                const startOffset = Math.max(0, Math.floor((clampNoon(it.arrival) - clampNoon(columns[0])) / DAY));
-                const endOffset = Math.min(columns.length - 1, Math.floor((clampNoon(it.departure) - clampNoon(columns[0])) / DAY));
-                const span = Math.max(1, endOffset - startOffset + 1);
-                const bar = document.createElement('div');
-                bar.className = 'bar';
-                bar.style.left = `calc(${startOffset} * var(--cell))`;
-                bar.style.width = `calc(${span} * var(--cell))`;
-                bar.style.background = colorFor(it.category);
-                bar.title = `${it.title} • ${it.arrival.toDateString()} → ${it.departure.toDateString()}`;
-                bar.innerHTML = `<span class="truncate">${it.title}</span><span style="opacity:.9">${it.arrival.getDate()}–${it.departure.getDate()}</span>`;
-                if (editMode) {
-                    bar.setAttribute('draggable', 'true');
-                    bar.addEventListener('dragstart', () => { dragSource = { type: 'placed', personIdx, laneIdx, itemRef: it }; });
-                    bar.addEventListener('dragend', () => { dragSource = null; removeGhosts(); });
-                    bar.addEventListener('dblclick', () => {
-                        const laneRef = alloc[personIdx][laneIdx];
-                        const i = laneRef.indexOf(it);
-                        if (i > -1) laneRef.splice(i, 1);
-                        const moved = { id: it.id, title: it.title, arrival: it.arrival, departure: it.departure, category: it.category };
-                        pool.push(moved);
-                        renderPool(); renderPeople();
-                        atlasUnassignAllocation(it.id).catch(err => {
-                            console.error("Unassign failed:", err);
-                            // Revert
-                            pool = pool.filter(p => p.id !== it.id);
-                            laneRef.push(it);
-                            renderPool(); renderPeople();
-                        });
-                    });
-                }
-                lane.appendChild(bar);
-            });
-
-            lanesWrap.appendChild(lane);
+      columns.forEach(d => {
+        const cell = document.createElement('div'); cell.className = 'lane-cell';
+        cell.addEventListener('dragover', (ev) => { if (!editMode) return; allowDrop(ev); const itm = (dragSource && dragSource.itemRef) || null; if (!itm) return; showGhost(lane, d, itm); });
+        cell.addEventListener('dragleave', () => { removeGhosts(); });
+        cell.addEventListener('drop', (ev) => {
+          if (!editMode) return; ev.preventDefault();
+          let movingItem = null; const from = dragSource;
+          if (from && from.type === 'pool') { movingItem = from.itemRef; }
+          else if (from && from.type === 'placed') {
+            const srcLane = alloc[from.personIdx][from.laneIdx];
+            const i = srcLane.indexOf(from.itemRef);
+            if (i > -1) srcLane.splice(i, 1);
+            movingItem = from.itemRef;
+          }
+          let ok = false; if (movingItem) ok = placeItem(personIdx, d, movingItem, laneIdx);
+          if (!ok && from && from.type === 'placed') {
+            alloc[from.personIdx][from.laneIdx].push(movingItem);
+            renderPeople();
+          }
+          dragSource = null; removeGhosts();
         });
+        laneGrid.appendChild(cell);
+      });
 
-        person.appendChild(lanesWrap);
-        peopleWrap.appendChild(person);
+      lane.appendChild(laneGrid);
+
+      laneArr.filter(withinView).forEach((it) => {
+        const startOffset = Math.max(0, Math.floor((clampNoon(it.arrival) - clampNoon(columns[0])) / DAY));
+        const endOffset = Math.min(columns.length - 1, Math.floor((clampNoon(it.departure) - clampNoon(columns[0])) / DAY));
+        const span = Math.max(1, endOffset - startOffset + 1);
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        bar.style.left = `calc(${startOffset} * var(--cell))`;
+        bar.style.width = `calc(${span} * var(--cell))`;
+        bar.style.background = colorFor(it.category);
+        bar.title = `${it.title} • ${it.arrival.toDateString()} → ${it.departure.toDateString()}`;
+        bar.innerHTML = `<span class="truncate">${it.title}</span><span style="opacity:.9">${it.arrival.getDate()}–${it.departure.getDate()}</span>`;
+        if (editMode) {
+          bar.setAttribute('draggable', 'true');
+          bar.addEventListener('dragstart', () => { dragSource = { type: 'placed', personIdx, laneIdx, itemRef: it }; });
+          bar.addEventListener('dragend', () => { dragSource = null; removeGhosts(); });
+          bar.addEventListener('dblclick', () => unassignItem(personIdx, laneIdx, it));
+        }
+        lane.appendChild(bar);
+      });
+
+      lanesWrap.appendChild(lane);
     });
+
+    person.appendChild(lanesWrap);
+    peopleWrap.appendChild(person);
+  });
 }
 
-// ===== Width sync =====
+function placeItem(personIdx, dropDate, item, laneIdx) {
+  if (!editMode) return false;
+  ensureAllocShape(peopleDocs.length);
+
+  // Try the lane given, then expand lanes if needed
+  const tryLane = (li) => {
+    const laneArr = alloc[personIdx][li];
+    const sorted = laneArr.slice().sort((a,b) => a.arrival - b.arrival);
+    if (sorted.some(x => overlaps(item, x))) return false;
+    laneArr.push(item);
+    pool = pool.filter(p => p.id !== item.id);
+    renderPool(); renderPeople();
+    const personDoc = peopleDocs[personIdx];
+    atlasAssignAllocation(item.id, personDoc?._id, li).catch(err => {
+      L.error("Save failed:", err);
+      // revert UI
+      const i = laneArr.indexOf(item);
+      if (i > -1) laneArr.splice(i, 1);
+      pool.push(item);
+      renderPool(); renderPeople();
+    });
+    return true;
+  };
+
+  if (laneIdx == null) laneIdx = 0;
+  if (!alloc[personIdx][laneIdx]) alloc[personIdx][laneIdx] = [];
+  if (tryLane(laneIdx)) return true;
+
+  // find a free lane
+  for (let l = 0; l < alloc[personIdx].length; l++) {
+    if (l === laneIdx) continue;
+    if (tryLane(l)) return true;
+  }
+  // create new lane if under cap
+  if (alloc[personIdx].length < 10) {
+    alloc[personIdx].push([]);
+    return tryLane(alloc[personIdx].length - 1);
+  }
+  return false;
+}
+function unassignItem(personIdx, laneIdx, it) {
+  const laneRef = alloc[personIdx][laneIdx];
+  const i = laneRef.indexOf(it);
+  if (i > -1) laneRef.splice(i, 1);
+  const moved = { id: it.id, title: it.title, arrival: it.arrival, departure: it.departure, category: it.category };
+  pool.push(moved);
+  renderPool(); renderPeople();
+  atlasUnassignAllocation(it.id).catch(err => {
+    L.error("Unassign failed:", err);
+    // revert
+    pool = pool.filter(p => p.id !== it.id);
+    laneRef.push(it);
+    renderPool(); renderPeople();
+  });
+}
+
+/* ====== Width sync ====== */
 function syncWidths() {
-    document.querySelectorAll('.lanes').forEach(l => { l.style.width = `calc(${columns.length} * var(--cell))`; });
-    if (datesGrid) datesGrid.style.gridTemplateColumns = `repeat(${columns.length}, var(--cell))`;
-    if (timeline) timeline.style.width = `calc(${columns.length} * var(--cell))`;
+  document.querySelectorAll('.lanes').forEach(l => { l.style.width = `calc(${columns.length} * var(--cell))`; });
+  if (datesGrid) datesGrid.style.gridTemplateColumns = `repeat(${columns.length}, var(--cell))`;
+  if (timeline) timeline.style.width = `calc(${columns.length} * var(--cell))`;
 }
 
-// ===== Add Items Page logic (optional: insert to DB) =====
-function showAddItemsPage() {
-    const appGrid = document.getElementById('appGrid');
-    const addPage = document.getElementById('addPage');
-    if (!appGrid || !addPage) return;
-    appGrid.classList.add('hidden');
-    addPage.classList.remove('hidden');
-    ensureSheetHasRows(5);
-}
-function hideAddItemsPage() {
-    const appGrid = document.getElementById('appGrid');
-    const addPage = document.getElementById('addPage');
-    if (!appGrid || !addPage) return;
-    addPage.classList.add('hidden');
-    appGrid.classList.remove('hidden');
-    if (typeof setTab === 'function') setTab('Pending'); // guard if setTab exists
-    renderPool();
-}
-$("#backToMain")?.addEventListener('click', hideAddItemsPage);
-$("#add5Rows")?.addEventListener('click', () => ensureSheetHasRows(5));
-$("#saveSheet")?.addEventListener('click', saveSheetToPool);
-
-function ensureSheetHasRows(n) {
-    const sheet = document.getElementById('sheet'); if (!sheet) return;
-    const cats = Object.keys(COUNTRY_COLORS);
-    for (let i = 0; i < n; i++) {
-        const rid = `r${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-        sheet.insertAdjacentHTML('beforeend', `
-      <div class="sheet-row"><input id="${rid}_id" placeholder="ID" /></div>
-      <div class="sheet-row"><input id="${rid}_title" placeholder="Title" /></div>
-      <div class="sheet-row"><input id="${rid}_arr" type="date" /></div>
-      <div class="sheet-row"><input id="${rid}_dep" type="date" /></div>
-      <div class="sheet-row"><select id="${rid}_cat">${cats.map(c => `<option value="${c}">${c}</option>`).join('')}</select></div>
-    `);
-    }
-}
-
+/* ====== Add Items (optional) ====== */
 async function saveSheetToPool() {
-    const sheet = document.getElementById('sheet');
-    const err = document.getElementById('sheetError');
-    if (!sheet || !err) return;
-    err.textContent = '';
-    const rows = [];
-    const cells = Array.from(sheet.children).slice(5);
-    for (let i = 0; i < cells.length; i += 5) {
-        const id = cells[i].querySelector('input')?.value.trim();
-        const title = cells[i + 1].querySelector('input')?.value.trim();
-        const arr = cells[i + 2].querySelector('input')?.value;
-        const dep = cells[i + 3].querySelector('input')?.value;
-        const cat = cells[i + 4].querySelector('select')?.value;
-        if (!id && !title && !arr && !dep) continue;
-        if (!id || !title || !arr || !dep) { err.textContent = 'All non-empty rows need ID, Title, Arrival and Departure.'; return; }
-        const a = new Date(arr + 'T12:00:00');
-        const d = new Date(dep + 'T12:00:00');
-        if (isNaN(a) || isNaN(d)) { err.textContent = 'Invalid date in one of the rows.'; return; }
-        if (d < a) { err.textContent = 'Departure cannot be before Arrival.'; return; }
-        rows.push({ id, title, arrival: a, departure: d, category: cat });
-    }
-    // de-dup by ID
-    const seen = new Set(pool.map(x => x.id));
-    for (const r of rows) {
-        if (seen.has(r.id)) { err.textContent = `Duplicate ID: ${r.id}`; return; }
-        seen.add(r.id);
-    }
-    pool.push(...rows);
-    renderPool();
-    // Optional: also insert into MongoDB as pending
-    try {
-        const docs = rows.map(r => ({
-            id: r.id,
-            title: r.title,
-            arrival: r.arrival.toISOString(),
-            departure: r.departure.toISOString(),
-            region: r.category,
-            status: "pending",
-            assignedTo: null, lane: null,
-            notes: "", version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
-        }));
-        await atlasCreateAllocations(docs);
-    } catch (e) { console.warn("Insert to DB failed (continuing locally):", e); }
-    hideAddItemsPage();
+  const sheet = document.getElementById('sheet');
+  const err = document.getElementById('sheetError');
+  if (!sheet || !err) return;
+  err.textContent = '';
+  const rows = [];
+  const cells = Array.from(sheet.children).slice(5);
+  for (let i = 0; i < cells.length; i += 5) {
+    const id = cells[i].querySelector('input')?.value.trim();
+    const title = cells[i + 1].querySelector('input')?.value.trim();
+    const arr = cells[i + 2].querySelector('input')?.value;
+    const dep = cells[i + 3].querySelector('input')?.value;
+    const cat = cells[i + 4].querySelector('select')?.value;
+    if (!id && !title && !arr && !dep) continue;
+    if (!id || !title || !arr || !dep) { err.textContent = 'All non-empty rows need ID, Title, Arrival and Departure.'; return; }
+    const a = new Date(arr + 'T12:00:00');
+    const d = new Date(dep + 'T12:00:00');
+    if (isNaN(a) || isNaN(d)) { err.textContent = 'Invalid date in one of the rows.'; return; }
+    if (d < a) { err.textContent = 'Departure cannot be before Arrival.'; return; }
+    rows.push({ id, title, arrival: a, departure: d, category: cat });
+  }
+  const seen = new Set(pool.map(x => x.id));
+  for (const r of rows) { if (seen.has(r.id)) { err.textContent = `Duplicate ID: ${r.id}`; return; } seen.add(r.id); }
+  pool.push(...rows);
+  renderPool();
+  try {
+    const docs = rows.map(r => ({
+      id: r.id, title: r.title,
+      arrival: r.arrival.toISOString(), departure: r.departure.toISOString(),
+      region: r.category, status: "pending",
+      assignedTo: null, lane: null, notes: "",
+      version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    }));
+    await atlasCreateAllocations(docs);
+  } catch (e) { L.warn("Insert to DB failed (continuing locally):", e); }
 }
 
-// ===== Render all =====
+/* ====== Atlas data ops ====== */
+// PEOPLE: load all; show actives; map by _id
+async function atlasLoadPeople() {
+  return withDB(async (db) => {
+    const docs = await db.collection(CONFIG.col.people).find({}, { sort: { fullname: 1 } });
+    const people = docs.map(d => ({
+      _id: d._id, id: d.id,
+      fullname: d.fullname,
+      preferredName: d.preferredName || d.fullname,
+      status: d.status
+    }));
+    const idxByOid = {};
+    people.forEach((p, i) => { idxByOid[keyifyObjectId(p._id)] = i; });
+    return { people, idxByOid };
+  });
+}
+
+// REGIONS: support BOTH shapes
+// A) many docs: { name: "GCC & African", color: "#0f4e0dff" }
+// B) single doc: { _id: "...", "GCC & African":"#0f4e0dff", "US & Canada":"#174477ff", ... }
+async function atlasLoadRegions() {
+  return withDB(async (db) => {
+    const docs = await db.collection(CONFIG.col.regions).find({});
+    let map = {};
+    if (!docs || docs.length === 0) {
+      L.warn("Regions: no docs found; using defaults.");
+      return { Other: "#94a3b8" };
+    }
+    if (docs.length === 1 && docs[0] && typeof docs[0] === 'object') {
+      const single = { ...docs[0] };
+      delete single._id;
+      Object.entries(single).forEach(([k,v]) => {
+        if (typeof v === 'string' && v.trim()) map[k] = v;
+      });
+    } else {
+      // look for name/color pairs
+      docs.forEach(d => {
+        const name = d.name || d.region || d.title;
+        const color = d.color || d.hex || d.value;
+        if (name && typeof color === 'string') map[name] = color;
+      });
+    }
+    // ensure fallback
+    if (!map.Other) map.Other = "#94a3b8";
+    return map;
+  });
+}
+
+// ALLOCATIONS: your schema stores arrival/departure as strings → filter with strings
+async function atlasLoadAllocations(fromDate, toDate) {
+  return withDB(async (db) => {
+    const Alloc = db.collection(CONFIG.col.allocs);
+    const fromISO = fromDate.toISOString();
+    const toISO   = toDate.toISOString();
+
+    const assigned = await Alloc.find({
+      status: { $in: ["assigned","Assigned","ASSIGNED"] },
+      arrival: { $lt: toISO },
+      departure: { $gt: fromISO }
+    });
+    const pending = await Alloc.find(
+      { status: { $in: ["pending","Pending","PENDING"] } },
+      { sort: { arrival: 1 } }
+    );
+
+    // normalize for UI
+    assigned.forEach(a => { a.arrival = isoToDate(a.arrival); a.departure = isoToDate(a.departure); });
+    pending.forEach(a => { a.arrival = isoToDate(a.arrival); a.departure = isoToDate(a.departure); });
+
+    return { assigned, pending };
+  });
+}
+
+async function atlasAssignAllocation(appId, personOid, laneIndex) {
+  return withDB(async (db) => {
+    await db.collection(CONFIG.col.allocs).updateOne(
+      { id: appId },
+      {
+        $set: {
+          status: "assigned",
+          assignedTo: new Realm.BSON.ObjectId(String(personOid)),
+          lane: laneIndex,
+          updatedAt: new Date().toISOString()
+        },
+        $inc: { version: 1 }
+      }
+    );
+  });
+}
+async function atlasUnassignAllocation(appId) {
+  return withDB(async (db) => {
+    await db.collection(CONFIG.col.allocs).updateOne(
+      { id: appId },
+      {
+        $set: {
+          status: "pending",
+          assignedTo: null,
+          lane: null,
+          updatedAt: new Date().toISOString()
+        },
+        $inc: { version: 1 }
+      }
+    );
+  });
+}
+async function atlasCreateAllocations(docs) {
+  return withDB(async (db) => {
+    await db.collection(CONFIG.col.allocs).insertMany(docs);
+  });
+}
+
+/* ====== Render all ====== */
 function renderAll() { renderDates(); renderPool(); renderPeople(); scrollToCurrentMonthIfYear(); }
 
-// ===== Boot from Atlas =====
+/* ====== Boot ====== */
 async function bootFromAtlas() {
-    // Decide a reasonable range to fetch initially (full current year)
-    const y = focusDate.getFullYear();
-    const from = new Date(y, 0, 1);
-    const to = new Date(y, 11, 31, 23, 59, 59);
+  const y = focusDate.getFullYear();
+  const from = new Date(y, 0, 1);
+  const to   = new Date(y, 11, 31, 23, 59, 59);
 
-    const db = await getDB();
-    const [{ people, idxByOid }, colors, { assigned, pending }] = await Promise.all([
-        atlasLoadPeople(db),
-        atlasLoadRegions(db),
-        atlasLoadAllocations(db, from, to)
-    ]);
-
-    // Build UI data
+  try {
+    const { people, idxByOid } = await atlasLoadPeople();
     peopleDocs = people;
     personIdxByOid = idxByOid;
-    demoPeople = people.map(p => p.preferredName);
-    COUNTRY_COLORS = colors;
+    // prefer actives; if none tagged active, show all
+    demoPeople = people.filter(p => /active/i.test(String(p.status||"")))
+                      .map(p => p.preferredName || p.fullname);
+    if (demoPeople.length === 0) demoPeople = people.map(p => p.preferredName || p.fullname);
+    ensureAllocShape(peopleDocs.length);
+    L.info("People loaded:", peopleDocs.length, "UI showing:", demoPeople.length);
+  } catch (e) {
+    L.error("People load failed:", e);
+    peopleDocs = []; personIdxByOid = {}; demoPeople = [];
+    ensureAllocShape(0);
+  }
 
-    // pool (pending)
-    pool = pending.map(a => ({ id: a.id, title: a.title, arrival: a.arrival, departure: a.departure, category: a.region }));
+  try {
+    COUNTRY_COLORS = await atlasLoadRegions();
+    L.info("Regions loaded:", Object.keys(COUNTRY_COLORS).length, COUNTRY_COLORS);
+  } catch (e) {
+    L.warn("Regions load failed; using defaults:", e);
+    COUNTRY_COLORS = { Other: "#94a3b8" };
+  }
 
-    // alloc (assigned)
-    alloc = Array.from({ length: people.length }, () => []);
+  try {
+    const { assigned, pending } = await atlasLoadAllocations(from, to);
+    L.info("Allocations — assigned:", assigned.length, "pending:", pending.length);
+
+    // Drawer pool
+    pool = pending.map(a => ({
+      id: a.id, title: a.title,
+      arrival: a.arrival, departure: a.departure,
+      category: a.region
+    }));
+
+    // Initialize lanes
+    alloc = Array.from({ length: peopleDocs.length }, () => [[]]);
+
+    // Map assigned → people/lanes
     for (const a of assigned) {
-        const oid = a.assignedTo && (a.assignedTo._id || a.assignedTo);
-        const personIdx = personIdxByOid[String(oid)];
-        if (personIdx == null) continue;
-        const lane = Number.isInteger(a.lane) ? a.lane : 0;
-        while (!alloc[personIdx][lane]) alloc[personIdx].push([]);
-        alloc[personIdx][lane].push({
-            id: a.id, title: a.title,
-            arrival: a.arrival, departure: a.departure,
-            category: a.region
-        });
+      const pid = keyifyObjectId(a.assignedTo && (a.assignedTo._id || a.assignedTo));
+      const personIdx = personIdxByOid[pid];
+      if (personIdx == null) {
+        L.warn("Unmapped assignedTo (no matching person):", pid, "title:", a.title);
+        continue;
+      }
+      const lane = Number.isInteger(a.lane) ? a.lane : 0;
+      while (!alloc[personIdx][lane]) alloc[personIdx].push([]);
+      alloc[personIdx][lane].push({
+        id: a.id, title: a.title,
+        arrival: a.arrival, departure: a.departure,
+        category: a.region
+      });
     }
-    // sort each lane
-    for (const lanes of alloc) for (const lane of lanes) lane.sort((x, y) => x.arrival - y.arrival);
+    for (const lanes of alloc) for (const lane of lanes) lane.sort((x,y) => x.arrival - y.arrival);
 
-    // First render
+  } catch (e) {
+    L.error("Allocation load failed — showing empty board:", e);
+    pool = [];
+    alloc = Array.from({ length: peopleDocs.length }, () => [[]]);
+  }
+
+  // Final sanity feedback
+  L.info("alloc shape ok?", Array.isArray(alloc), "people:", alloc.length, "colors:", Object.keys(COUNTRY_COLORS).length);
+  if (!pool.length) L.warn("No pending allocations for current filters.");
+  if (alloc.every(lanes => lanes.length === 1 && lanes[0].length === 0)) L.warn("No assigned allocations mapped to people.");
+
+  renderAll();
+  syncWidths();
+}
+
+/* ====== CSS var fallback ====== */
+if (!getComputedStyle(document.documentElement).getPropertyValue('--cell').trim()) {
+  document.documentElement.style.setProperty('--cell', '30px');
+}
+
+/* ====== Start ====== */
+document.addEventListener('DOMContentLoaded', () => {
+  renderDates();
+  syncWidths();
+  bootFromAtlas().catch(e => {
+    L.error("Boot failed. Using empty data.", e);
     renderAll();
     syncWidths();
-}
-
-// ===== CSS var fallback =====
-if (!getComputedStyle(document.documentElement).getPropertyValue('--cell').trim()) {
-    document.documentElement.style.setProperty('--cell', '30px');
-}
-
-// ===== Kick everything off =====
-document.addEventListener('DOMContentLoaded', () => {
-    // Build columns before boot so header renders promptly
-    renderDates();
-    syncWidths();
-    // Then load from Atlas and paint data
-    bootFromAtlas().catch(e => {
-        console.error("[Atlas] boot failed. Using empty data.", e);
-        renderAll();
-        syncWidths();
-    });
+  });
 });
