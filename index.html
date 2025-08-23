@@ -23,9 +23,9 @@
             </div>
         </div>
         <div class="date-controls">
-            <button id="prevMonth" class="btn">◀ Previous</button>
+            <button id="prevMonth" class="btn">Previous</button>
             <span id="monthLabel" class="btn"></span>
-            <button id="nextMonth" class="btn">Next ▶</button>
+            <button id="nextMonth" class="btn">Next</button>
         </div>
         <section id="timeline">
             <div class="viewport">
@@ -87,21 +87,34 @@
             <button id="backToMain" class="btn">⟵ Back</button>
             <strong style="opacity:.9">Add Pending Items</strong>
             <div class="spacer"></div>
-            <button id="add5Rows" class="btn">+5 rows</button>
+
+            <!-- NEW: flexible row count control -->
+            <label style="display:inline-flex;align-items:center;gap:.5rem;">
+                Rows:
+                <input id="rowCount" type="number" min="1" value="1"
+                    style="width:72px;padding:.35rem .5rem;border-radius:8px;border:1px solid var(--sheet-border, #1f2937);background:#0f172a;color:#e5e7eb;">
+            </label>
+            <button id="addRows" class="btn">+ Add rows</button>
+
             <button id="saveSheet" class="btn">Save to Pool</button>
         </div>
+
         <div class="addpage-body">
             <div id="sheet" class="sheet">
                 <div class="hdr">ID</div>
                 <div class="hdr">Title</div>
+                <div class="hdr">Guest Name</div>
+                <div class="hdr">Villa</div>
                 <div class="hdr">Arrival</div>
                 <div class="hdr">Departure</div>
                 <div class="hdr">Category</div>
-                <!-- rows go here -->
+                <div class="hdr">Notes</div>
+                <!-- rows get appended here -->
             </div>
             <div id="sheetError" style="color:#f87171; margin-top:.5rem; font-size:.875rem;"></div>
         </div>
     </section>
+
     <script src="https://unpkg.com/realm-web/dist/bundle.iife.js"></script>
     <script src="app.js"></script>
 </body>
