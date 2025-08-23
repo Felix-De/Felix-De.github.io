@@ -15,9 +15,8 @@ const CONFIG = {
   auth: { mode: "anonymous", email: "", password: "" }
 };
 
-/* ====== Logging helpers ====== */
+/* ====== Minimal logger ====== */
 const L = {
-  pfx: "[AM-Alloc]",
   info: (...a) => console.info("[AM-Alloc]", ...a),
   warn: (...a) => console.warn("[AM-Alloc]", ...a),
   error: (...a) => console.error("[AM-Alloc]", ...a)
@@ -25,7 +24,6 @@ const L = {
 
 /* ====== Realm init ====== */
 const realmApp = new Realm.App({ id: CONFIG.appId, baseUrl: CONFIG.baseUrl });
-
 function getCredentials() {
   return CONFIG.auth.mode === "email"
     ? Realm.Credentials.emailPassword(CONFIG.auth.email, CONFIG.auth.password)
@@ -79,6 +77,7 @@ function keyifyObjectId(x) {
   const m = s.match(/[a-f0-9]{24}/i);
   return (m ? m[0] : s).toLowerCase();
 }
+function normalizeRegionName(name) { return String(name || "").replace(/\s+/g, " ").trim(); }
 
 /* ====== State ====== */
 let viewMode = "YEAR";
@@ -87,7 +86,7 @@ let columns = [];
 let editMode = false;
 let poolCollapsed = false;
 
-let COUNTRY_COLORS = { Other: "#94a3b8" }; // fallback
+let COUNTRY_COLORS = { Other: "#94a3b8" }; // filled from region mapping
 let peopleDocs = [];          // all people docs
 let demoPeople = [];          // names to display (actives preferred)
 let personIdxByOid = {};      // _id hex -> index
@@ -160,6 +159,10 @@ function scrollToCurrentMonthIfYear() {
 }
 
 /* ====== Items & colors ====== */
+function colorFor(cat) {
+  const key = normalizeRegionName(cat);
+  return COUNTRY_COLORS[key] || COUNTRY_COLORS.Other || "#94a3b8";
+}
 function overlaps(a,b) {
   const aS = clampNoon(a.arrival).getTime(), aE = clampNoon(a.departure).getTime();
   const bS = clampNoon(b.arrival).getTime(), bE = clampNoon(b.departure).getTime();
@@ -173,7 +176,6 @@ function withinView(it) {
   const e = clampNoon(it.departure).getTime();
   return !(e < vs || s > ve);
 }
-function colorFor(cat) { return COUNTRY_COLORS[cat] || COUNTRY_COLORS.Other || "#94a3b8"; }
 
 /* ====== DnD ====== */
 let dragSource = null;
@@ -233,7 +235,6 @@ function renderPool() {
   list.forEach(it => {
     const card = document.createElement('div');
     card.className = 'item-card';
-    // Use category color
     const c = colorFor(it.category);
     card.style.borderColor = c;
     card.style.background = c;
@@ -257,7 +258,6 @@ function renderPool() {
     panel.appendChild(empty);
   }
 
-  // Populate category dropdowns (if present)
   const catSel = document.getElementById('addCategory');
   if (catSel) {
     catSel.innerHTML = Object.keys(COUNTRY_COLORS)
@@ -268,15 +268,12 @@ function renderPool() {
 /* ====== People & lanes ====== */
 function renderPeople() {
   if (!peopleWrap) return;
-  ensureAllocShape(peopleDocs.length); // match people docs length
+  ensureAllocShape(peopleDocs.length);
   peopleWrap.innerHTML = '';
 
-  // We render rows for demoPeople; map to peopleDocs indices by name
-  // To keep things simple: demoPeople is a filtered list in the same order as peopleDocs for actives first.
-  // We'll render in peopleDocs order but only show if status active (or if demoPeople includes it).
   const showIdx = peopleDocs
     .map((p, idx) => ({ idx, active: /active/i.test(String(p.status||"")) }))
-    .filter(o => o.active || demoPeople.includes(peopleDocs[o.idx].preferredName || peopleDocs[o.idx].fullname));
+    .filter(o => o.active || true); // show all; tweak if you want actives only
 
   showIdx.forEach(({ idx: personIdx }) => {
     if (!alloc[personIdx]) alloc[personIdx] = [[]];
@@ -357,7 +354,6 @@ function placeItem(personIdx, dropDate, item, laneIdx) {
   if (!editMode) return false;
   ensureAllocShape(peopleDocs.length);
 
-  // Try the lane given, then expand lanes if needed
   const tryLane = (li) => {
     const laneArr = alloc[personIdx][li];
     const sorted = laneArr.slice().sort((a,b) => a.arrival - b.arrival);
@@ -368,7 +364,6 @@ function placeItem(personIdx, dropDate, item, laneIdx) {
     const personDoc = peopleDocs[personIdx];
     atlasAssignAllocation(item.id, personDoc?._id, li).catch(err => {
       L.error("Save failed:", err);
-      // revert UI
       const i = laneArr.indexOf(item);
       if (i > -1) laneArr.splice(i, 1);
       pool.push(item);
@@ -381,12 +376,10 @@ function placeItem(personIdx, dropDate, item, laneIdx) {
   if (!alloc[personIdx][laneIdx]) alloc[personIdx][laneIdx] = [];
   if (tryLane(laneIdx)) return true;
 
-  // find a free lane
   for (let l = 0; l < alloc[personIdx].length; l++) {
     if (l === laneIdx) continue;
     if (tryLane(l)) return true;
   }
-  // create new lane if under cap
   if (alloc[personIdx].length < 10) {
     alloc[personIdx].push([]);
     return tryLane(alloc[personIdx].length - 1);
@@ -402,7 +395,6 @@ function unassignItem(personIdx, laneIdx, it) {
   renderPool(); renderPeople();
   atlasUnassignAllocation(it.id).catch(err => {
     L.error("Unassign failed:", err);
-    // revert
     pool = pool.filter(p => p.id !== it.id);
     laneRef.push(it);
     renderPool(); renderPeople();
@@ -455,15 +447,13 @@ async function saveSheetToPool() {
 }
 
 /* ====== Atlas data ops ====== */
-// PEOPLE: load all; show actives; map by _id
+// PEOPLE: load all; index by _id; keep status
 async function atlasLoadPeople() {
   return withDB(async (db) => {
     const docs = await db.collection(CONFIG.col.people).find({}, { sort: { fullname: 1 } });
     const people = docs.map(d => ({
-      _id: d._id, id: d.id,
-      fullname: d.fullname,
-      preferredName: d.preferredName || d.fullname,
-      status: d.status
+      _id: d._id, id: d.id, fullname: d.fullname,
+      preferredName: d.preferredName || d.fullname, status: d.status
     }));
     const idxByOid = {};
     people.forEach((p, i) => { idxByOid[keyifyObjectId(p._id)] = i; });
@@ -471,38 +461,25 @@ async function atlasLoadPeople() {
   });
 }
 
-// REGIONS: support BOTH shapes
-// A) many docs: { name: "GCC & African", color: "#0f4e0dff" }
-// B) single doc: { _id: "...", "GCC & African":"#0f4e0dff", "US & Canada":"#174477ff", ... }
+// REGIONS: single mapping doc with keys → color hex
 async function atlasLoadRegions() {
   return withDB(async (db) => {
-    const docs = await db.collection(CONFIG.col.regions).find({});
-    let map = {};
-    if (!docs || docs.length === 0) {
-      L.warn("Regions: no docs found; using defaults.");
+    const doc = await db.collection(CONFIG.col.regions).findOne({});
+    if (!doc) {
+      L.warn("Regions: no doc found; using fallback.");
       return { Other: "#94a3b8" };
     }
-    if (docs.length === 1 && docs[0] && typeof docs[0] === 'object') {
-      const single = { ...docs[0] };
-      delete single._id;
-      Object.entries(single).forEach(([k,v]) => {
-        if (typeof v === 'string' && v.trim()) map[k] = v;
-      });
-    } else {
-      // look for name/color pairs
-      docs.forEach(d => {
-        const name = d.name || d.region || d.title;
-        const color = d.color || d.hex || d.value;
-        if (name && typeof color === 'string') map[name] = color;
-      });
+    const map = {};
+    for (const [k, v] of Object.entries(doc)) {
+      if (k === "_id") continue;
+      if (typeof v === "string" && v.trim()) map[k.trim()] = v.trim();
     }
-    // ensure fallback
     if (!map.Other) map.Other = "#94a3b8";
     return map;
   });
 }
 
-// ALLOCATIONS: your schema stores arrival/departure as strings → filter with strings
+// ALLOCATIONS: arrival/departure are strings in your schema → filter with ISO strings
 async function atlasLoadAllocations(fromDate, toDate) {
   return withDB(async (db) => {
     const Alloc = db.collection(CONFIG.col.allocs);
@@ -519,7 +496,6 @@ async function atlasLoadAllocations(fromDate, toDate) {
       { sort: { arrival: 1 } }
     );
 
-    // normalize for UI
     assigned.forEach(a => { a.arrival = isoToDate(a.arrival); a.departure = isoToDate(a.departure); });
     pending.forEach(a => { a.arrival = isoToDate(a.arrival); a.departure = isoToDate(a.departure); });
 
@@ -578,12 +554,11 @@ async function bootFromAtlas() {
     const { people, idxByOid } = await atlasLoadPeople();
     peopleDocs = people;
     personIdxByOid = idxByOid;
-    // prefer actives; if none tagged active, show all
     demoPeople = people.filter(p => /active/i.test(String(p.status||"")))
                       .map(p => p.preferredName || p.fullname);
     if (demoPeople.length === 0) demoPeople = people.map(p => p.preferredName || p.fullname);
     ensureAllocShape(peopleDocs.length);
-    L.info("People loaded:", peopleDocs.length, "UI showing:", demoPeople.length);
+    L.info("People:", peopleDocs.length);
   } catch (e) {
     L.error("People load failed:", e);
     peopleDocs = []; personIdxByOid = {}; demoPeople = [];
@@ -592,9 +567,9 @@ async function bootFromAtlas() {
 
   try {
     COUNTRY_COLORS = await atlasLoadRegions();
-    L.info("Regions loaded:", Object.keys(COUNTRY_COLORS).length, COUNTRY_COLORS);
+    L.info("Regions keys:", Object.keys(COUNTRY_COLORS).length);
   } catch (e) {
-    L.warn("Regions load failed; using defaults:", e);
+    L.warn("Regions load failed; using fallback:", e);
     COUNTRY_COLORS = { Other: "#94a3b8" };
   }
 
@@ -606,7 +581,7 @@ async function bootFromAtlas() {
     pool = pending.map(a => ({
       id: a.id, title: a.title,
       arrival: a.arrival, departure: a.departure,
-      category: a.region
+      category: normalizeRegionName(a.region)
     }));
 
     // Initialize lanes
@@ -617,7 +592,7 @@ async function bootFromAtlas() {
       const pid = keyifyObjectId(a.assignedTo && (a.assignedTo._id || a.assignedTo));
       const personIdx = personIdxByOid[pid];
       if (personIdx == null) {
-        L.warn("Unmapped assignedTo (no matching person):", pid, "title:", a.title);
+        L.warn("Unmapped assignedTo:", pid, "title:", a.title);
         continue;
       }
       const lane = Number.isInteger(a.lane) ? a.lane : 0;
@@ -625,21 +600,16 @@ async function bootFromAtlas() {
       alloc[personIdx][lane].push({
         id: a.id, title: a.title,
         arrival: a.arrival, departure: a.departure,
-        category: a.region
+        category: normalizeRegionName(a.region)
       });
     }
     for (const lanes of alloc) for (const lane of lanes) lane.sort((x,y) => x.arrival - y.arrival);
 
   } catch (e) {
-    L.error("Allocation load failed — showing empty board:", e);
+    L.error("Allocation load failed — empty board:", e);
     pool = [];
     alloc = Array.from({ length: peopleDocs.length }, () => [[]]);
   }
-
-  // Final sanity feedback
-  L.info("alloc shape ok?", Array.isArray(alloc), "people:", alloc.length, "colors:", Object.keys(COUNTRY_COLORS).length);
-  if (!pool.length) L.warn("No pending allocations for current filters.");
-  if (alloc.every(lanes => lanes.length === 1 && lanes[0].length === 0)) L.warn("No assigned allocations mapped to people.");
 
   renderAll();
   syncWidths();
