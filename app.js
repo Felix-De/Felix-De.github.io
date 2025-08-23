@@ -10,7 +10,7 @@ const CONFIG = {
     appId: "amallocation-tgczmjh",             // Your App Services Client App ID
     baseUrl: "https://services.cloud.mongodb.com",
     service: "mongodb-atlas",                  // default service name
-    db: "amallocation",                        // your DB
+    db: "am_database",                        // your DB
     col: { people: "people", regions: "regions", allocs: "allocations" },
     auth: { mode: "anonymous" }                // dev: "anonymous"; prod: { mode:"email", email:"", password:"" }
 };
