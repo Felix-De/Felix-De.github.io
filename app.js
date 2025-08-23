@@ -79,6 +79,25 @@ function keyifyObjectId(x) {
 }
 function normalizeRegionName(name) { return String(name || "").replace(/\s+/g, " ").trim(); }
 
+/* Contrast helper: picks black/white text based on background color */
+function getContrastColor(hex) {
+    if (!hex) return "#000";
+    let c = hex.replace("#", "").trim().toLowerCase();
+    // handle #RRGGBBAA → drop AA
+    if (c.length === 8) c = c.slice(0, 6);
+    // handle #RGB
+    if (c.length === 3) c = c.split("").map(ch => ch + ch).join("");
+    // fallback
+    if (!/^[0-9a-f]{6}$/.test(c)) return "#000";
+
+    const r = parseInt(c.substr(0, 2), 16);
+    const g = parseInt(c.substr(2, 2), 16);
+    const b = parseInt(c.substr(4, 2), 16);
+    // YIQ luminance
+    const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+    return yiq >= 128 ? "#000000" : "#ffffff";
+}
+
 /* ====== State ====== */
 let viewMode = "YEAR";
 let focusDate = clampNoon(new Date());
@@ -206,6 +225,7 @@ function showGhost(laneEl, _startDate, item) {
     ghost.style.left = `calc(${startOffset} * var(--cell))`;
     ghost.style.width = `calc(${span} * var(--cell))`;
     ghost.style.background = colorFor(item.category);
+    ghost.style.color = getContrastColor(colorFor(item.category));
     ghost.textContent = item.title;
     laneEl.appendChild(ghost);
 }
@@ -235,18 +255,20 @@ function renderPool() {
     list.forEach(it => {
         const card = document.createElement('div');
         card.className = 'item-card';
-        const c = colorFor(it.category);
-        card.style.borderColor = c;
-        card.style.background = c;
+        const bg = colorFor(it.category);
+        const fg = getContrastColor(bg);
+        card.style.borderColor = bg;
+        card.style.background = bg;
+        card.style.color = fg;
         card.innerHTML = `
       <div class="row" style="justify-content:space-between; font-weight:600; font-size:.875rem;">
         <span class="truncate" title="${it.title}">${it.title}</span>
       </div>
-      <div style="font-size:.75rem; color:var(--muted); margin-top:.25rem">
+      <div style="font-size:.75rem; opacity:.9; margin-top:.25rem">
         ${it.arrival.toLocaleDateString(undefined, { day: '2-digit', month: 'short' })}
         → ${it.departure.toLocaleDateString(undefined, { day: '2-digit', month: 'short' })}
       </div>
-      <div style="font-size:.7rem; color:var(--muted); margin-top:.125rem">ID: ${it.id}</div>`;
+      <div style="font-size:.7rem; opacity:.9; margin-top:.125rem">ID: ${it.id}</div>`;
         panel.appendChild(card);
         makeDraggable(card, it);
     });
@@ -271,15 +293,14 @@ function renderPeople() {
     ensureAllocShape(peopleDocs.length);
     peopleWrap.innerHTML = '';
 
-    const showIdx = peopleDocs
-        .map((p, idx) => ({ idx, active: /active/i.test(String(p.status || "")) }))
-        .filter(o => o.active || true); // show all; tweak if you want actives only
+    const showIdx = peopleDocs.map((p, idx) => ({ idx }));
 
     showIdx.forEach(({ idx: personIdx }) => {
         if (!alloc[personIdx]) alloc[personIdx] = [[]];
         if (alloc[personIdx].length === 0) alloc[personIdx] = [[]];
 
-        const name = peopleDocs[personIdx].preferredName || peopleDocs[personIdx].fullname || "Unknown";
+        const p = peopleDocs[personIdx];
+        const name = (p && (p.preferredName && p.preferredName.trim())) || p.fullname || "Unknown";
 
         const person = document.createElement('section'); person.className = 'person';
         person.innerHTML = `
@@ -328,9 +349,12 @@ function renderPeople() {
                 const span = Math.max(1, endOffset - startOffset + 1);
                 const bar = document.createElement('div');
                 bar.className = 'bar';
+                const bg = colorFor(it.category);
+                const fg = getContrastColor(bg);
                 bar.style.left = `calc(${startOffset} * var(--cell))`;
                 bar.style.width = `calc(${span} * var(--cell))`;
-                bar.style.background = colorFor(it.category);
+                bar.style.background = bg;
+                bar.style.color = fg;
                 bar.title = `${it.title} • ${it.arrival.toDateString()} → ${it.departure.toDateString()}`;
                 bar.innerHTML = `<span class="truncate">${it.title}</span><span style="opacity:.9">${it.arrival.getDate()}–${it.departure.getDate()}</span>`;
                 if (editMode) {
@@ -447,31 +471,25 @@ async function saveSheetToPool() {
 }
 
 /* ====== Atlas data ops ====== */
-// PEOPLE: load all; index by _id; keep status
+// PEOPLE: load all; index by _id; keep preferedname as separate field
 async function atlasLoadPeople() {
     return withDB(async (db) => {
-        const docs = await db.collection(CONFIG.col.people)
-            .find({}, { sort: { fullname: 1 } });
-
+        const docs = await db.collection(CONFIG.col.people).find({}, { sort: { fullname: 1 } });
         const people = docs.map(d => {
-            const preferred = (typeof d.preferedname === 'string') ? d.preferedname.trim() : null; // schema key!
+            const preferred = (typeof d.preferedname === 'string') ? d.preferedname.trim() : null; // schema key = preferedname
             const full = (typeof d.fullname === 'string') ? d.fullname.trim() : '';
             return {
-                _id: d._id,
-                id: d.id,
+                _id: d._id, id: d.id,
                 fullname: full,
-                // store null when missing/blank so you can tell them apart
-                preferredName: preferred && preferred.length ? preferred : null,
+                preferredName: (preferred && preferred.length ? preferred : null),
                 status: d.status
             };
         });
-
         const idxByOid = {};
         people.forEach((p, i) => { idxByOid[keyifyObjectId(p._id)] = i; });
         return { people, idxByOid };
     });
 }
-
 
 // REGIONS: single mapping doc with keys → color hex
 async function atlasLoadRegions() {
@@ -566,9 +584,7 @@ async function bootFromAtlas() {
         const { people, idxByOid } = await atlasLoadPeople();
         peopleDocs = people;
         personIdxByOid = idxByOid;
-        demoPeople = people.filter(p => /active/i.test(String(p.status || "")))
-            .map(p => p.preferredName || p.fullname);
-        if (demoPeople.length === 0) demoPeople = people.map(p => p.preferredName || p.fullname);
+        demoPeople = people.map(p => (p.preferredName && p.preferredName.trim()) || p.fullname);
         ensureAllocShape(peopleDocs.length);
         L.info("People:", peopleDocs.length);
     } catch (e) {
