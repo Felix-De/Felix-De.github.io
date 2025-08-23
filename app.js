@@ -11,7 +11,7 @@ const CONFIG = {
     baseUrl: "https://services.cloud.mongodb.com",
     service: "mongodb-atlas",                  // default service name
     db: "am_database",                        // your DB
-    col: { people: "people", regions: "regions", allocs: "allocations" },
+    col: { people: "arismeeha", regions: "region", allocs: "allocation" },
     auth: { mode: "anonymous" }                // dev: "anonymous"; prod: { mode:"email", email:"", password:"" }
 };
 
